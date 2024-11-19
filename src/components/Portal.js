@@ -1,6 +1,8 @@
+// src/Portal.js
 import React, { useState, useEffect, useRef } from 'react';
 import './styles.css';
 import Captcha from './captcha';
+import axios from 'axios';
 
 // Constants for normalization and threshold adjustments
 const AVERAGE_DPI = 1600; // Adjust based on common high-DPI mouse settings
@@ -91,7 +93,7 @@ const Portal = () => {
           // Calculate straight-line distance between last position and current position
           const straightLineDistance = Math.sqrt(
             (event.clientX - lastCursorPosition.x) ** 2 +
-            (event.clientY - lastCursorPosition.y) ** 2
+              (event.clientY - lastCursorPosition.y) ** 2
           );
 
           // Calculate path deviation as the difference between actual distance and straight-line distance
@@ -221,7 +223,7 @@ const Portal = () => {
     }
   };
 
-  const handleLogin = () => {
+  const handleLogin = async () => {
     // Calculate session duration
     const currentTime = performance.now();
     const sessionDuration = (currentTime - sessionStartRef.current) / 1000; // in seconds
@@ -254,6 +256,8 @@ const Portal = () => {
         : 0;
 
     const formattedData = {
+      // Optionally, include a unique user identifier (e.g., UUID)
+      userId: aadhaarNumber || 'anonymous-user', // Replace with a better unique identifier if available
       avgCursorSpeed: interactionData.avgCursorSpeed
         ? interactionData.avgCursorSpeed.toFixed(2)
         : 0,
@@ -277,30 +281,19 @@ const Portal = () => {
       scrollBehavior: scrollDistance.toFixed(2),
     };
 
-    downloadCSV(formattedData);
+    try {
+      // Send data to backend
+      const response = await axios.post('/api/collect-data', formattedData);
+      console.log(response.data);
+    } catch (error) {
+      console.error('Error sending interaction data to backend:', error);
+    }
 
     if (aadhaarNumber.length === 12) {
       alert('Login successful!');
     } else {
       setErrorMessage('Please enter a valid 12-digit Aadhaar number.');
     }
-  };
-
-  const downloadCSV = (data) => {
-    const headers = Object.keys(data).join(',');
-    const values = Object.values(data).join(',');
-
-    const csvContent = `${headers}\n${values}`;
-    const blob = new Blob([csvContent], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = 'interaction_data.csv';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
   };
 
   return (
