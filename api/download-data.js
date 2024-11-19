@@ -19,7 +19,7 @@ async function connectToDatabase() {
       useUnifiedTopology: true,
     });
 
-    const db = client.db('botDetectorDB'); // Replace with your database name
+    const db = client.db('Lablehumandata'); // Replace with your database name
     cachedClient = client;
     cachedDb = db;
     return { client, db };
@@ -37,7 +37,7 @@ module.exports = async (req, res) => {
 
   try {
     const { db } = await connectToDatabase();
-    const collection = db.collection('interactions'); // Replace with your collection name
+    const collection = db.collection('datahuman'); // Replace with your collection name
     const data = await collection.find({}).toArray();
 
     if (data.length === 0) {
