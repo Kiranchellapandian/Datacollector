@@ -1,7 +1,5 @@
-// src/Portal.js
 import React, { useState, useEffect, useRef } from 'react';
-import './styles.css';
-import Captcha from './captcha';
+import './components/styles.css';
 import axios from 'axios';
 
 // Constants for normalization and threshold adjustments
@@ -10,6 +8,7 @@ const DPI_NORMALIZATION_FACTOR = AVERAGE_DPI / 800; // Normalize for high-DPI de
 const MAX_HUMAN_ACCELERATION = 50000; // Threshold for human-like acceleration
 
 const Portal = () => {
+  // State variables
   const [aadhaarNumber, setAadhaarNumber] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [interactionData, setInteractionData] = useState({
@@ -22,12 +21,16 @@ const Portal = () => {
     typingSpeed: 0,
     keyPressDuration: 0,
     keyTransitionTime: 0,
+    keyTransitionStdDev: 0,
+    typingAccuracy: 100,
     errorRate: 0,
     sessionDuration: 0,
-    pageNavigationPattern: [],
     averageDwellTime: 0,
     scrollBehavior: 0,
+    interactionComplexity: 0,
   });
+  
+  // Additional state variables
   const [clickCount, setClickCount] = useState(0);
   const [keystrokeDurations, setKeystrokeDurations] = useState([]);
   const [scrollDistance, setScrollDistance] = useState(0);
@@ -35,15 +38,23 @@ const Portal = () => {
   const [errorCount, setErrorCount] = useState(0);
   const [dwellTimes, setDwellTimes] = useState([]);
   const [keyTransitionTimes, setKeyTransitionTimes] = useState([]);
+  
+  // Refs for tracking events
   const keyDownTimes = useRef({});
   const lastKeyDownTimeRef = useRef(null);
-  const [navigationEvents, setNavigationEvents] = useState([]);
-  const [showCaptcha, setShowCaptcha] = useState(false);
   const sessionStartRef = useRef(performance.now());
   const lastInteractionTimeRef = useRef(sessionStartRef.current);
   const lastCursorPositionRef = useRef({ x: null, y: null, time: null });
   const lastScrollPositionRef = useRef(window.scrollY);
   const lastFocusTimeRef = useRef(null);
+  
+  // Ref to keep track of the latest avgCursorSpeed
+  const avgCursorSpeedRef = useRef(interactionData.avgCursorSpeed);
+
+  // Update the ref whenever avgCursorSpeed changes
+  useEffect(() => {
+    avgCursorSpeedRef.current = interactionData.avgCursorSpeed;
+  }, [interactionData.avgCursorSpeed]);
 
   // Utility function to calculate standard deviation
   const calculateStandardDeviation = (values) => {
@@ -57,7 +68,28 @@ const Portal = () => {
   useEffect(() => {
     let mouseMoveEvents = [];
 
-    const trackMouseMovement = (event) => {
+    // Throttle function to limit the frequency of event handler execution
+    const throttle = (func, limit) => {
+      let lastFunc;
+      let lastRan;
+      return function (...args) {
+        const context = this;
+        if (!lastRan) {
+          func.apply(context, args);
+          lastRan = Date.now();
+        } else {
+          clearTimeout(lastFunc);
+          lastFunc = setTimeout(function () {
+            if (Date.now() - lastRan >= limit) {
+              func.apply(context, args);
+              lastRan = Date.now();
+            }
+          }, limit - (Date.now() - lastRan));
+        }
+      };
+    };
+
+    const trackMouseMovement = throttle((event) => {
       const currentTime = performance.now();
       const lastCursorPosition = lastCursorPositionRef.current;
 
@@ -69,11 +101,13 @@ const Portal = () => {
 
         if (timeElapsed > 0 && timeElapsed < 5) {
           let speed = distance / timeElapsed;
-          let acceleration = (speed - interactionData.avgCursorSpeed) / timeElapsed;
+          let acceleration = (speed - avgCursorSpeedRef.current) / timeElapsed;
 
           // Cap acceleration at a human threshold
           if (acceleration > MAX_HUMAN_ACCELERATION) {
             acceleration = MAX_HUMAN_ACCELERATION;
+          } else if (acceleration < -MAX_HUMAN_ACCELERATION) {
+            acceleration = -MAX_HUMAN_ACCELERATION;
           }
 
           // Collect mouse move events for advanced analysis
@@ -83,8 +117,9 @@ const Portal = () => {
             time: currentTime,
           });
 
-          // Compute moving average of speed and acceleration
-          const recentMouseEvents = mouseMoveEvents.slice(-50); // last 50 events
+          // Keep only the last 50 events for moving average
+          const recentMouseEvents = mouseMoveEvents.slice(-50);
+
           const avgSpeed =
             recentMouseEvents.reduce((sum, e) => sum + e.speed, 0) / recentMouseEvents.length;
           const avgAcceleration =
@@ -96,28 +131,34 @@ const Portal = () => {
               (event.clientY - lastCursorPosition.y) ** 2
           );
 
-          // Calculate path deviation as the difference between actual distance and straight-line distance
+          // Calculate path deviation as the absolute difference between actual distance and straight-line distance
           const deviation = Math.abs(distance - straightLineDistance);
 
-          // Update jitter
+          // Dynamic jitter threshold based on avgCursorSpeed
+          const jitterThreshold = avgCursorSpeedRef.current * 0.05; // 5% of avg speed
           const movement = Math.sqrt(dx * dx + dy * dy);
-          const isJitter = movement < 2; // Threshold can be adjusted
+          const isJitter = movement < jitterThreshold;
 
-          setInteractionData((prevData) => ({
-            ...prevData,
-            avgCursorSpeed: avgSpeed,
-            cursorAcceleration: avgAcceleration,
-            pathDeviation:
-              prevData.pathDeviation > 0
-                ? (prevData.pathDeviation + deviation) / 2
-                : deviation,
-            jitter: isJitter ? prevData.jitter + 1 : prevData.jitter,
-          }));
+          setInteractionData((prevData) => {
+            const updatedData = {
+              ...prevData,
+              avgCursorSpeed: avgSpeed,
+              cursorAcceleration: avgAcceleration,
+              pathDeviation:
+                prevData.pathDeviation > 0
+                  ? (prevData.pathDeviation * (recentMouseEvents.length - 1) + deviation) / recentMouseEvents.length
+                  : deviation,
+              jitter: isJitter ? prevData.jitter + 1 : prevData.jitter,
+            };
+
+            return updatedData;
+          });
         }
       }
+
       lastCursorPositionRef.current = { x: event.clientX, y: event.clientY, time: currentTime };
       lastInteractionTimeRef.current = currentTime;
-    };
+    }, 100); // Throttle to once every 100ms
 
     const handleClick = () => {
       setClickCount((prev) => prev + 1);
@@ -127,6 +168,7 @@ const Portal = () => {
     const handleScroll = () => {
       const newScrollPosition = window.scrollY;
       const delta = Math.abs(newScrollPosition - lastScrollPositionRef.current);
+
       if (delta > 0) {
         setScrollDistance((prev) => prev + delta);
         lastInteractionTimeRef.current = performance.now();
@@ -146,6 +188,7 @@ const Portal = () => {
     // Key event handlers
     const handleKeyDown = (event) => {
       const currentTime = performance.now();
+
       if (!keyDownTimes.current[event.code]) {
         keyDownTimes.current[event.code] = currentTime;
 
@@ -161,15 +204,18 @@ const Portal = () => {
 
     const handleKeyUp = (event) => {
       const currentTime = performance.now();
+
       if (keyDownTimes.current[event.code]) {
         const keyPressDuration = currentTime - keyDownTimes.current[event.code];
         // Record keystroke duration (key press duration)
         setKeystrokeDurations((prevDurations) => [...prevDurations, keyPressDuration]);
-        delete keyDownTimes.current[event.code];
 
+        // Increment error count for specific keys
         if (event.key === 'Backspace' || event.key === 'Delete') {
-          setErrorCount((prev) => prev + 1); // Count as an error
+          setErrorCount((prev) => prev + 1);
         }
+
+        delete keyDownTimes.current[event.code];
       }
     };
 
@@ -195,14 +241,17 @@ const Portal = () => {
       }
     };
 
+    // Event listeners
     document.addEventListener('mousemove', trackMouseMovement);
     document.addEventListener('click', handleClick);
     window.addEventListener('scroll', handleScroll);
     document.addEventListener('focusin', handleFocusIn);
     document.addEventListener('focusout', handleFocusOut);
 
-    const idleInterval = setInterval(calculateIdleTime, 5000);
+    // Idle time calculation interval
+    const idleInterval = setInterval(calculateIdleTime, 5000); // Every 5 seconds
 
+    // Cleanup on unmount
     return () => {
       document.removeEventListener('mousemove', trackMouseMovement);
       document.removeEventListener('click', handleClick);
@@ -211,8 +260,9 @@ const Portal = () => {
       document.removeEventListener('focusout', handleFocusOut);
       clearInterval(idleInterval);
     };
-  }, [interactionData.avgCursorSpeed]);
+  }, []); // Dependency array is empty as refs handle dynamic data
 
+  // Aadhaar number input handler with validation
   const handleAadhaarChange = (e) => {
     const value = e.target.value.replace(/\s+/g, '');
     if (/^\d{0,12}$/.test(value)) {
@@ -223,31 +273,106 @@ const Portal = () => {
     }
   };
 
-  const handleLogin = async () => {
-    // Calculate session duration
-    const currentTime = performance.now();
-    const sessionDuration = (currentTime - sessionStartRef.current) / 1000; // in seconds
+  // Helper function to calculate interaction complexity
+  const calculateInteractionComplexity = () => {
+    const {
+      avgCursorSpeed,
+      cursorAcceleration,
+      pathDeviation,
+      typingSpeed,
+      scrollBehavior,
+    } = interactionData;
 
-    // Compute averages
+    const interactionComplexity =
+      avgCursorSpeed * 0.3 +
+      cursorAcceleration * 0.2 +
+      pathDeviation * 0.2 +
+      typingSpeed * 0.2 +
+      scrollBehavior * 0.1;
+
+    return parseFloat(interactionComplexity.toFixed(2));
+  };
+
+  // Function to calculate typing accuracy
+  const calculateTypingAccuracy = () => {
+    const totalKeystrokes = keystrokeDurations.length;
+    const correctKeystrokes = totalKeystrokes - errorCount;
+    const typingAccuracy = totalKeystrokes > 0
+      ? ((correctKeystrokes / totalKeystrokes) * 100).toFixed(2)
+      : 100;
+
+    return parseFloat(typingAccuracy);
+  };
+
+  // Function to parse and sanitize data before sending
+  const sanitizeData = () => {
+    const {
+      avgCursorSpeed,
+      cursorAcceleration,
+      pathDeviation,
+      idleTime,
+      jitter,
+      clickPattern,
+      typingSpeed,
+      keyPressDuration,
+      keyTransitionTime,
+      keyTransitionStdDev,
+      typingAccuracy,
+      errorRate,
+      sessionDuration,
+      averageDwellTime,
+      scrollBehavior,
+      interactionComplexity,
+    } = interactionData;
+
+    // Validate numerical fields
+    const isValid =
+      avgCursorSpeed >= 0 &&
+      Math.abs(cursorAcceleration) <= MAX_HUMAN_ACCELERATION &&
+      pathDeviation >= 0 &&
+      idleTime >= 0 &&
+      jitter >= 0 &&
+      clickPattern >= 0 &&
+      typingSpeed >= 0 &&
+      keyPressDuration >= 0 &&
+      keyTransitionTime >= 0 &&
+      keyTransitionStdDev >= 0 &&
+      typingAccuracy >= 0 &&
+      errorRate >= 0 &&
+      sessionDuration >= 0 &&
+      averageDwellTime >= 0 &&
+      scrollBehavior >= 0 &&
+      interactionComplexity >= 0;
+
+    return isValid;
+  };
+
+  // Login handler with data submission
+  const handleLogin = async () => {
+    // Capture the end time of the session
+    const endTime = performance.now();
+    const sessionDurationInSeconds = (endTime - sessionStartRef.current) / 1000; // Convert milliseconds to seconds
+
+    // Compute averages and derived metrics
     const totalKeyPressDuration = keystrokeDurations.reduce((sum, dur) => sum + dur, 0);
     const averageKeyPressDuration =
       keystrokeDurations.length > 0 ? totalKeyPressDuration / keystrokeDurations.length : 0;
 
     const typingSpeed =
-      sessionDuration > 0
-        ? ((keystrokeDurations.length / (sessionDuration / 60)).toFixed(2))
-        : 0; // chars per minute
+      sessionDurationInSeconds > 0
+        ? (keystrokeDurations.length / (sessionDurationInSeconds / 60)).toFixed(2) // chars per minute
+        : 0;
 
     const averageKeyTransitionTime =
       keyTransitionTimes.length > 0
-        ? keyTransitionTimes.reduce((sum, time) => sum + time, 0) / keyTransitionTimes.length
+        ? (keyTransitionTimes.reduce((sum, time) => sum + time, 0) / keyTransitionTimes.length).toFixed(2)
         : 0;
 
-    const keyTransitionStdDev = calculateStandardDeviation(keyTransitionTimes);
+    const keyTransitionStdDev = calculateStandardDeviation(keyTransitionTimes).toFixed(2);
 
     const averageDwellTime =
       dwellTimes.length > 0
-        ? dwellTimes.reduce((sum, time) => sum + time, 0) / dwellTimes.length
+        ? (dwellTimes.reduce((sum, time) => sum + time, 0) / dwellTimes.length).toFixed(2)
         : 0;
 
     const errorRate =
@@ -255,38 +380,46 @@ const Portal = () => {
         ? ((errorCount / keystrokeDurations.length) * 100).toFixed(2)
         : 0;
 
+    const typingAccuracy = calculateTypingAccuracy();
+
+    const interactionComplexity = calculateInteractionComplexity();
+
     const formattedData = {
-      // Optionally, include a unique user identifier (e.g., UUID)
-      userId: aadhaarNumber || 'anonymous-user', // Replace with a better unique identifier if available
-      avgCursorSpeed: interactionData.avgCursorSpeed
-        ? interactionData.avgCursorSpeed.toFixed(2)
-        : 0,
-      cursorAcceleration: interactionData.cursorAcceleration
-        ? interactionData.cursorAcceleration.toFixed(2)
-        : 0,
-      pathDeviation: interactionData.pathDeviation
-        ? interactionData.pathDeviation.toFixed(2)
-        : 0,
-      idleTime: idleTime.toFixed(2),
-      jitter: interactionData.jitter ? interactionData.jitter.toFixed(2) : 0,
+      userId: aadhaarNumber.trim() !== '' ? aadhaarNumber.trim() : 'anonymous-user',
+      avgCursorSpeed: parseFloat(interactionData.avgCursorSpeed.toFixed(2)),
+      cursorAcceleration: parseFloat(interactionData.cursorAcceleration.toFixed(2)),
+      pathDeviation: parseFloat(interactionData.pathDeviation.toFixed(2)),
+      idleTime: parseFloat(idleTime.toFixed(2)),
+      jitter: parseFloat(interactionData.jitter.toFixed(2)),
       clickPattern: clickCount,
-      typingSpeed,
-      keyPressDuration: averageKeyPressDuration.toFixed(2),
-      keyTransitionTime: averageKeyTransitionTime.toFixed(2),
-      keyTransitionStdDev: keyTransitionStdDev.toFixed(2),
-      errorRate,
-      sessionDuration: sessionDuration.toFixed(2),
-      pageNavigationPattern: JSON.stringify(navigationEvents),
-      averageDwellTime: averageDwellTime.toFixed(2),
-      scrollBehavior: scrollDistance.toFixed(2),
+      typingSpeed: parseFloat(typingSpeed),
+      keyPressDuration: parseFloat(averageKeyPressDuration.toFixed(2)),
+      keyTransitionTime: parseFloat(averageKeyTransitionTime),
+      keyTransitionStdDev: parseFloat(keyTransitionStdDev),
+      typingAccuracy: typingAccuracy,
+      errorRate: parseFloat(errorRate),
+      sessionDuration: parseFloat(sessionDurationInSeconds.toFixed(2)),
+      averageDwellTime: parseFloat(averageDwellTime),
+      scrollBehavior: parseFloat(scrollDistance.toFixed(2)),
+      interactionComplexity: interactionComplexity,
     };
 
+    // Validate data before sending
+    if (!sanitizeData()) {
+      setErrorMessage('Detected invalid interaction data. Please try again.');
+      return;
+    }
+
+    // Debugging: Log formatted data before sending
+    console.log('--- Formatted Data to Send ---', formattedData);
+
     try {
-      // Send data to backend
-      const response = await axios.post('/api/collect-data', formattedData);
-      console.log(response.data);
+      const response = await axios.post('http://localhost:5000/api/collect-data', formattedData);
+      console.log('Server Response:', response.data);
+      console.log('Updated Interaction Data:', interactionData);
     } catch (error) {
       console.error('Error sending interaction data to backend:', error);
+      setErrorMessage('Failed to send data to the server. Please try again.');
     }
 
     if (aadhaarNumber.length === 12) {
@@ -294,6 +427,9 @@ const Portal = () => {
     } else {
       setErrorMessage('Please enter a valid 12-digit Aadhaar number.');
     }
+
+    // Reset session start time for the next session
+    sessionStartRef.current = performance.now();
   };
 
   return (
@@ -307,11 +443,16 @@ const Portal = () => {
           value={aadhaarNumber}
           onChange={handleAadhaarChange}
           placeholder="Enter your 12-digit Aadhaar number"
+          maxLength={12}
         />
         {errorMessage && <p style={{ color: 'red' }}>{errorMessage}</p>}
       </div>
-      {showCaptcha && <Captcha />}
-      <button id="loginButton" onClick={handleLogin} disabled={aadhaarNumber.length !== 12}>
+      {/* Removed Captcha as it's not used */}
+      <button
+        id="loginButton"
+        onClick={handleLogin}
+        disabled={aadhaarNumber.length !== 12}
+      >
         Login
       </button>
       <footer>
